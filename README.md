@@ -1,9 +1,7 @@
 # Lead Router
 
 Prioritises sales leads and routes them to the right rep (Salesforce Ignite Challenge).
-
-Status: data cleaner done. Scoring, routing, API and dashboard are next.
-
+(Just add in stuff to the read me as u end up completing the things we need)
 ## Setup
 
 ```
@@ -29,9 +27,11 @@ python -m pytest
 
 ## Cleaning rules (summary)
 
-- Nothing is dropped. Bad or missing fields become `None` (or a safe default) and the record is kept.
-- Region/language/vertical/seniority/activity: lower-case, strip punctuation, look up in an alias table. Two-region strings ("North America Asia-Pacific") keep both regions.
-- Company size: handles `1,000`, `5k`, `500-1000` (midpoint) and blanks; zero, negative or garbage values become missing.
-- `VIP_Referral`: only an explicit `True` counts. `Unknown`/blank is False.
-- Duplicate Lead_IDs are different companies, so both are kept; later ones become `L-123#2`. Missing IDs become `LEAD-ROW-<n>`.
-- Rep capacity: negative or unreadable means the rep takes no leads. Unknown seniority defaults to Junior so it can never receive Critical leads.
+Hey! Here’s a quick rundown of how we clean up the lead data:
+
+-Save everything: We don't throw anything away. If a field is bad or missing, we just swap it for None or a safe default and keep the record moving.
+-Tidy up text: Things like region, language, and seniority get lowercased, stripped of weird punctuation, and matched against our alias table. If a record lists two regions (like "North America Asia-Pacific"), we keep both.
+-Company size: We handle all sorts of formats—like 1,000, 5k, or ranges like 500-1000 (which we average out). Any zero, negative, or garbled numbers just get marked as missing.
+-VIP status: Only an explicit True counts for VIP_Referral. Anything blank or unknown defaults to False.
+-Handling duplicates: If two leads share the same Lead_ID, we assume they're different companies and keep both, just renaming the later ones to something like L-123#2. If an ID is totally missing, we assign it LEAD-ROW-<n>.
+-Rep capacity: If a rep's capacity looks negative or unreadable, we treat it as zero. If we don't know a rep's seniority, we default them to Junior so they never get assigned Critical leads by mistake.
