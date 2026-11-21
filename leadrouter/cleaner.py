@@ -93,6 +93,11 @@ class Lead:
     size: Optional[int]
     activity: Optional[str]
     vip: bool
+    # set later by scoring and routing
+    score: int = 0
+    priority: str = "Low"
+    assigned_to: Optional[str] = None
+    review_reason: str = ""
 
 
 @dataclass
@@ -101,10 +106,11 @@ class Rep:
     name: str
     regions: frozenset
     language: Optional[str]
-    expertise: Optional[str]  # None = no listed specialty
+    expertise: Optional[str]  # None = generalist
     seniority: str
     current: int
     max_capacity: int
+    last_assigned: int = 0  # for round robin in routing
 
     @property
     def remaining(self):
