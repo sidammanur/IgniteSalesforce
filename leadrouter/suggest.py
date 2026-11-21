@@ -32,6 +32,9 @@ class Suggester:
         self.decisions = []  # (features, 1 for assigned / 0 for skipped)
         self.skipped = set()
         self.trained = False
+        # accuracy: before each manager click, did the model guess the same thing?
+        self.checked = 0
+        self.correct = 0
 
     def fit(self, lead, rep):
         z = self.bias + sum(w * x for w, x in zip(self.weights, features(lead, rep)))
@@ -53,15 +56,27 @@ class Suggester:
             return None
         return min(options.values(), key=lambda r: (-self.fit(lead, r), r.rep_id))
 
-    def assign(self, lead, rep, retrain=True):
+    def score_guess(self, lead, rep, label):
+        self.checked += 1
+        self.correct += (self.fit(lead, rep) >= 0.5) == label
+
+    @property
+    def accuracy(self):
+        return 100 * self.correct / self.checked if self.checked else None
+
+    def assign(self, lead, rep, bulk=False):
+        # bulk accepts still train the model but don't count toward accuracy, nobody looked at them one by one
+        if not bulk:
+            self.score_guess(lead, rep, True)
         self.decisions.append((features(lead, rep), 1))
         rep.current += 1
         lead.assigned_to = rep.rep_id
         lead.review_reason = "Assigned from Manager Review"
-        if retrain:
+        if not bulk:
             self.retrain()
 
     def skip(self, lead, rep):
+        self.score_guess(lead, rep, False)
         self.decisions.append((features(lead, rep), 0))
         self.skipped.add((lead.lead_id, rep.rep_id))
         self.retrain()
@@ -73,7 +88,7 @@ class Suggester:
                 break
             rep = None if lead.assigned_to else self.best_rep(lead)
             if rep:
-                self.assign(lead, rep, retrain=False)
+                self.assign(lead, rep, bulk=True)
                 done += 1
         self.retrain()
         return done

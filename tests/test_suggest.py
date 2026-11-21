@@ -73,3 +73,15 @@ def test_accept_top_on_the_scale_data():
     assert s.accept_top(leads, 300) == 300
     assert sum(1 for l in stuck if l.assigned_to) == 300
     assert all(r.current <= r.max_capacity for r in reps)
+
+
+def test_accuracy_counts_one_by_one_picks_but_not_bulk():
+    s = Suggester([rep("a", max_capacity=10), rep("b", expertise="Retail", max_capacity=10)])
+    assert s.accuracy is None
+    first = lead("L-1")
+    s.assign(first, s.best_rep(first))  # model liked it and it got assigned: right
+    second = lead("L-2")
+    s.skip(second, s.best_rep(second))  # model liked it but it got skipped: wrong
+    assert (s.correct, s.checked) == (1, 2) and s.accuracy == 50
+    s.accept_top([lead("L-3"), lead("L-4")], 2)
+    assert s.checked == 2

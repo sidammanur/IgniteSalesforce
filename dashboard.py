@@ -238,8 +238,13 @@ if page == "Manager Review":
     else:
         st.caption(f"Using our starting weights until there are {MIN_DECISIONS} decisions with at least one "
                    f"assign and one skip ({assigned:,} assigned, {skipped:,} skipped so far).")
+    weights_col, accuracy_col = st.columns([3, 2])
     weights = pd.DataFrame({"Signal": FEATURES, "Start": START_WEIGHTS, "Now": suggester.weights}).round(2)
-    st.dataframe(weights, hide_index=True)
+    weights_col.dataframe(weights, hide_index=True, width="stretch")
+    accuracy = suggester.accuracy
+    accuracy_col.metric("Model accuracy", "No picks yet" if accuracy is None else f"{accuracy:.0f}%")
+    accuracy_col.caption(f"Before every Assign or Skip the model guesses what you'll pick. "
+                         f"Right {suggester.correct} of {suggester.checked} times so far. Bulk accepts don't count.")
 
 if page == "Rep Capacity":
     st.markdown("**Load by seniority**")
