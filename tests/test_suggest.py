@@ -62,7 +62,7 @@ def test_learns_that_managers_keep_skipping_managers():
         s.skip(stuck, reps[i])
         s.assign(stuck, reps[6 + i])
     assert s.trained
-    assert s.weights[2] < 0  # the Manager weight went negative
+    assert s.weights[3] < 0  # the Manager weight went negative
     assert s.best_rep(lead("new")).seniority == "Senior"
 
 
@@ -82,6 +82,42 @@ def test_accuracy_counts_one_by_one_picks_but_not_bulk():
     s.assign(first, s.best_rep(first))  # model liked it and it got assigned: right
     second = lead("L-2")
     s.skip(second, s.best_rep(second))  # model liked it but it got skipped: wrong
-    assert (s.correct, s.checked) == (1, 2) and s.accuracy == 50
+    assert s.hits == [True, False] and s.accuracy == 50
     s.accept_top([lead("L-3"), lead("L-4")], 2)
-    assert s.checked == 2
+    assert len(s.hits) == 2
+
+
+def test_plan_never_suggests_a_rep_more_times_than_they_have_room():
+    s = Suggester([rep("small", max_capacity=2), rep("big", expertise="Retail", max_capacity=3)])
+    picks = s.plan([lead(f"L-{i}") for i in range(10)])
+    assert len(picks) == 5
+    assert sorted(r.rep_id for r in picks.values()) == ["big", "big", "big", "small", "small"]
+
+
+def test_accept_top_uses_the_picks_it_was_given():
+    a, b = rep("a", max_capacity=1), rep("b", expertise="Retail", max_capacity=1)
+    s = Suggester([a, b])
+    leads = [lead("L-1"), lead("L-2")]
+    s.accept_top(leads, 1, picks={"L-1": b})
+    assert leads[0].assigned_to == "b" and a.current == 0
+
+
+def test_recent_accuracy_only_looks_at_the_last_picks():
+    s = Suggester([rep()])
+    s.hits = [False] * 30 + [True] * 20
+    assert s.recent_accuracy == 100 and s.accuracy == 40
+
+
+def test_model_can_learn_a_rule_that_mixes_industry_and_seniority():
+    # assign same industry non-managers, skip everything else
+    reps = [rep(f"sr-same-{i}") for i in range(4)] + [rep(f"sr-other-{i}", expertise="Retail") for i in range(4)] + \
+           [rep(f"mgr-same-{i}", seniority="Manager") for i in range(4)]
+    s = Suggester(reps)
+    for i, r in enumerate(reps):
+        stuck = lead(f"L-{i}")
+        good = r.expertise == "Technology" and r.seniority != "Manager"
+        (s.assign if good else s.skip)(stuck, r)
+    new = lead("new")
+    assert s.fit(new, rep("x")) > 0.5
+    assert s.fit(new, rep("y", expertise="Retail")) < 0.5
+    assert s.fit(new, rep("z", seniority="Manager")) < 0.5

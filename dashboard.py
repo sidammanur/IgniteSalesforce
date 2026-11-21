@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 
 from leadrouter.pipeline import TIERS, run, summary
-from leadrouter.suggest import FEATURES, MIN_DECISIONS, START_WEIGHTS, Suggester
+from leadrouter.suggest import FEATURES, MIN_DECISIONS, RECENT, START_WEIGHTS, Suggester
 
 LEVELS = ["Junior", "Senior", "Manager"]
 REP_STATUSES = ["Full", "Has room", "No capacity"]
@@ -61,47 +61,49 @@ def why(lead, rep):
     return f"{rep.seniority}, {industry}, {rep.remaining} of {rep.max_capacity} free"
 
 
-def review_table(leads, suggester):
+def review_table(leads, suggester, picks):
     rows = []
     for l in leads:
         if l.assigned_to:
             continue
-        rep = suggester.best_rep(l)
+        rep = picks.get(l.lead_id)
         rows.append({
             "Lead ID": l.lead_id,
             "Company": l.company,
             "Priority": l.priority,
             "Score": l.score,
             "Suggested Rep": f"{rep.name} ({rep.rep_id})" if rep else "",
-            "Why": why(l, rep) if rep else "Nobody with room in this region and language",
             "Fit": round(100 * suggester.fit(l, rep)) if rep else None,
+            "Why": why(l, rep) if rep else "No rep left with room in this region and language",
             "Industry": l.vertical or "Unknown",
             "Region": ", ".join(sorted(l.regions)) or "Unknown",
             "Language": l.language or "Unknown",
             "Review Reason": l.review_reason,
         })
-    return pd.DataFrame(rows, columns=["Lead ID", "Company", "Priority", "Score", "Suggested Rep", "Why", "Fit",
+    return pd.DataFrame(rows, columns=["Lead ID", "Company", "Priority", "Score", "Suggested Rep", "Fit", "Why",
                                        "Industry", "Region", "Language", "Review Reason"])
 
 
 def refresh():
     # rebuild the tables after a run or after a manager assigns/skips something
     r = st.session_state.run
+    picks = r["suggester"].plan(r["leads"])
     st.session_state.results = {
         "summary": summary(r["leads"], r["reps"]),
         "leads": leads_table(r["leads"], r["reps"]),
         "reps": reps_table(r["reps"]),
-        "review": review_table(r["leads"], r["suggester"]),
+        "review": review_table(r["leads"], r["suggester"], picks),
+        "picks": picks,
     }
 
 
 def decide(lead_ids, action):
+    # use the rep that was on screen, not a fresh pick, so nobody gets assigned to a rep they never saw
     r = st.session_state.run
+    picks = st.session_state.results["picks"]
     for lead_id in lead_ids:
-        lead = r["by_id"][lead_id]
-        rep = r["suggester"].best_rep(lead)
-        if rep:
-            action(lead, rep)
+        if lead_id in picks:
+            action(r["by_id"][lead_id], picks[lead_id])
     refresh()
     st.rerun()
 
@@ -191,15 +193,22 @@ if page == "Lead Queue":
 if page == "Manager Review":
     suggester = current["suggester"]
     review = results["review"]
-    st.caption(f"{len(review):,} leads still need a rep. Each one comes with the closest rep who still has room. "
-               "Region and language always match, the industry might not, so a manager makes the call.")
+    has_rep = review["Suggested Rep"] != ""
+    st.caption(f"{len(review):,} leads still need a rep and {has_rep.sum():,} of them can get one. Each rep is "
+               "only suggested as many times as they have free slots. Region and language always match, the "
+               "industry might not, so a manager makes the call.")
     picked = st.multiselect("Priority", TIERS, default=TIERS, key="review_tiers")
     review = review[review["Priority"].isin(picked)]
+    can_place = int((review["Suggested Rep"] != "").sum())
     table = st.dataframe(
         review, hide_index=True, width="stretch", height=450, on_select="rerun", selection_mode="multi-row",
         key=f"review_rows_{len(suggester.decisions)}",  # new key so old picks don't stick around after a decision
-        column_config={**score_column, "Fit": st.column_config.ProgressColumn(
-            "Fit", min_value=0, max_value=100, format="%d%%")})
+        column_config={
+            **score_column,
+            "Suggested Rep": st.column_config.TextColumn(width="medium"),
+            "Why": st.column_config.TextColumn(width="large"),
+            "Fit": st.column_config.ProgressColumn("Fit", min_value=0, max_value=100, format="%d%%"),
+        })
     chosen = review.iloc[table.selection.rows]["Lead ID"].tolist()
 
     # bulk buttons only touch the leads shown with the current priority filter
@@ -209,19 +218,20 @@ if page == "Manager Review":
         decide(chosen, suggester.assign)
     if a2.button(f"Skip selected ({len(chosen)})", disabled=not chosen, width="stretch"):
         decide(chosen, suggester.skip)
-    most = max(len(review), 1)
+    most = max(can_place, 1)
     top_n = a3.number_input("How many", min_value=1, max_value=most, value=min(100, most))
     bulk = None
-    if a4.button(f"Accept the top {top_n}", disabled=review.empty, width="stretch"):
+    if a4.button(f"Accept the top {top_n:,}", disabled=not can_place, width="stretch"):
         bulk = top_n
-    if a5.button(f"Accept all ({len(review):,})", disabled=review.empty, width="stretch"):
-        bulk = len(shown)
+    accept_all = f"Accept all {can_place:,} with a rep" if can_place else "No reps left with room"
+    if a5.button(accept_all, disabled=not can_place, width="stretch"):
+        bulk = can_place
+    left = len(review) - can_place
+    if left:
+        a5.caption(f"{left:,} have no rep with room left, they stay here.")
     if bulk:
-        done = suggester.accept_top(shown, bulk)
-        note = f"Assigned {done:,} leads."
-        if done < bulk:
-            note += f" The other {bulk - done:,} have nobody left with room in their region and language."
-        st.session_state.note = note
+        done = suggester.accept_top(shown, bulk, results["picks"])
+        st.session_state.note = f"Assigned {done:,} leads."
         refresh()
         st.rerun()
     if "note" in st.session_state:
@@ -239,12 +249,21 @@ if page == "Manager Review":
         st.caption(f"Using our starting weights until there are {MIN_DECISIONS} decisions with at least one "
                    f"assign and one skip ({assigned:,} assigned, {skipped:,} skipped so far).")
     weights_col, accuracy_col = st.columns([3, 2])
-    weights = pd.DataFrame({"Signal": FEATURES, "Start": START_WEIGHTS, "Now": suggester.weights}).round(2)
-    weights_col.dataframe(weights, hide_index=True, width="stretch")
-    accuracy = suggester.accuracy
-    accuracy_col.metric("Model accuracy", "No picks yet" if accuracy is None else f"{accuracy:.0f}%")
-    accuracy_col.caption(f"Before every Assign or Skip the model guesses what you'll pick. "
-                         f"Right {suggester.correct} of {suggester.checked} times so far. Bulk accepts don't count.")
+    weights = pd.DataFrame({"Signal": FEATURES, "Start": START_WEIGHTS, "Now": suggester.weights})
+    weights_col.dataframe(weights, hide_index=True, width="stretch",
+                          column_config={"Start": st.column_config.NumberColumn(format="%.2f"),
+                                         "Now": st.column_config.NumberColumn(format="%.2f")})
+    recent = suggester.recent_accuracy
+    hits = suggester.hits
+    accuracy_col.metric(f"Model accuracy, last {min(len(hits), RECENT) or RECENT} picks",
+                        "No picks yet" if recent is None else f"{recent:.0f}%")
+    if hits:
+        accuracy_col.caption(f"Before every Assign or Skip the model guesses what you'll pick. It has been right "
+                             f"{sum(hits)} of {len(hits)} times overall ({suggester.accuracy:.0f}%). "
+                             "Bulk accepts are not used when checking the model's accuracy.")
+    else:
+        accuracy_col.caption("Before every Assign or Skip the model guesses what you'll pick. "
+                             "Bulk accepts are not used when checking the model's accuracy.")
 
 if page == "Rep Capacity":
     st.markdown("**Load by seniority**")

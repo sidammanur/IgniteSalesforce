@@ -110,11 +110,16 @@ On the 50k file 5,126 leads end up in review, all because every rep who matches 
 
 So every lead in review gets a suggested rep. Region and language still have to match, Critical leads still never go to a Junior, but the industry can be different. The manager decides, the router never does this on its own.
 
-Suggestions are ranked by a logistic regression (scikit-learn) on four signals:
+Each rep is only suggested as many times as they have free slots. We go down the queue best lead first and hold a slot for every suggestion, so the "Accept all" count is exactly how many leads can really be placed.
+
+Suggestions are ranked by a logistic regression (scikit-learn) on seven signals:
 
 - same industry as the lead or not
 - how much free room the rep has
-- is the rep a Manager
-- Manager on a high score lead (a Manager is more ok for a 70 than a 40)
+- is the rep a Junior / a Manager (Senior is the baseline)
+- the lead's score
+- Manager on a high score lead, Junior on a high score lead
 
-There's no conversion data in the files, so there's nothing honest to train a lead scoring model on. Instead every Assign is a "yes, good suggestion" and every Skip is a "no". Until there are 10 decisions with at least one of each it uses our starting weights, after that it retrains on every click. The dashboard shows the starting weights next to the learned ones so you can see what changed.
+There's no conversion data in the files, so there's nothing honest to train a lead scoring model on. Instead every Assign is a "yes, good suggestion" and every Skip is a "no". Until there are 6 decisions with at least one of each it uses our starting weights, after that it retrains on every click. The dashboard shows the starting weights next to the learned ones so you can see what changed.
+
+Accuracy is measured honestly: right before every Assign or Skip the model guesses what the manager will do, and we check that guess before it learns from the click. The big number is the last 20 picks, the caption has the overall number. Bulk accepts still train the model, but they are not used when checking its accuracy because nobody looked at those leads one by one. If a manager's choices don't follow anything the model can see (industry, seniority, room, score), no model can beat a coin flip.
